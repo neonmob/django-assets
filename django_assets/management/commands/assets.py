@@ -31,7 +31,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from webassets.script import (CommandError as AssetCommandError,
                               GenericArgparseImplementation)
-from django_assets.env import get_env, autoload, DjangoResolver
+from django_assets.env import get_env, autoload, DjangoConfigStorage
 from django_assets.loaders import get_django_template_dirs, DjangoLoader
 
 
@@ -61,7 +61,7 @@ class Command(BaseCommand):
         # unparsed options, and ``options`` those that the Django command
         # has declared.
 
-        DjangoResolver.force_use_static_files = True
+        DjangoConfigStorage.force_debug = True
         # Create log
         log = logging.getLogger('django-assets')
         log.setLevel({0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}[int(options.get('verbosity', 1))])
@@ -77,7 +77,7 @@ class Command(BaseCommand):
                             if not b.is_container])
 
         if len(get_env()) == 0:
-            DjangoResolver.force_use_static_files = False
+            DjangoConfigStorage.force_debug = False
             raise CommandError('No asset bundles were found. '
                 'If you are defining assets directly within your '
                 'templates, you want to use the --parse-templates '
@@ -91,7 +91,7 @@ class Command(BaseCommand):
         except AssetCommandError, e:
             raise CommandError(e)
         finally:
-            DjangoResolver.force_use_static_files = False
+            DjangoConfigStorage.force_debug = False
 
     def load_from_templates(self):
         # Using the Django loader

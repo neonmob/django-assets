@@ -32,6 +32,8 @@ class DjangoConfigStorage(ConfigStorage):
         'expire': 'ASSETS_EXPIRE',
     }
 
+    force_debug = False
+
     def _transform_key(self, key):
         # STATIC_* are the new Django 1.3 settings,
         # MEDIA_* was used in earlier versions.
@@ -55,9 +57,13 @@ class DjangoConfigStorage(ConfigStorage):
         return self._mapping.get(key.lower(), key.upper())
 
     def __contains__(self, key):
+        if key.lower() == 'debug' and DjangoConfigStorage.force_debug:
+            return True
         return hasattr(settings, self._transform_key(key))
 
     def __getitem__(self, key):
+        if key.lower() == 'debug' and DjangoConfigStorage.force_debug:
+            return True
         if self.__contains__(key):
             value = self._get_deprecated(key)
             if value is not None:
@@ -109,14 +115,12 @@ class StorageGlobber(Globber):
 class DjangoResolver(Resolver):
     """Adds support for staticfiles resolving."""
 
-    force_use_staticfiles = False
-
     @property
     def use_staticfiles(self):
-        use_staticfiles = DjangoResolver.force_use_staticfiles or settings.ASSETS_DEBUG
-        if use_staticfiles and 'django.contrib.staticfiles' not in settings.INSTALLED_APPS:
-            raise Exception("You need to add the 'django.contrib.staticfiles' app for bundles to be found")
-        return use_staticfiles
+        result = DjangoConfigStorage.force_debug or settings.ASSETS_DEBUG
+        if result and 'django.contrib.staticfiles' not in settings.INSTALLED_APPS:
+            raise Exception("You need to add the 'django.contrib.staticfiles' app to your settings for bundles to be found")
+        return result
 
     def glob_staticfiles(self, item):
         # The staticfiles finder system can't do globs, but we can
