@@ -61,6 +61,7 @@ class Command(BaseCommand):
         # unparsed options, and ``options`` those that the Django command
         # has declared.
 
+        DjangoResolver.force_use_static_files = True
         # Create log
         log = logging.getLogger('django-assets')
         log.setLevel({0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}[int(options.get('verbosity', 1))])
@@ -76,6 +77,7 @@ class Command(BaseCommand):
                             if not b.is_container])
 
         if len(get_env()) == 0:
+            DjangoResolver.force_use_static_files = False
             raise CommandError('No asset bundles were found. '
                 'If you are defining assets directly within your '
                 'templates, you want to use the --parse-templates '
@@ -84,7 +86,6 @@ class Command(BaseCommand):
         prog = "%s assets" % path.basename(sys.argv[0])
         impl = GenericArgparseImplementation(
             env=get_env(), log=log, no_global_options=True, prog=prog)
-        DjangoResolver.force_use_static_files = True
         try:
             impl.run_with_argv(args)
         except AssetCommandError, e:
