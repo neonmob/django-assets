@@ -31,7 +31,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from webassets.script import (CommandError as AssetCommandError,
                               GenericArgparseImplementation)
-from django_assets.env import get_env, autoload
+from django_assets.env import get_env, autoload, DjangoResolver
 from django_assets.loaders import get_django_template_dirs, DjangoLoader
 
 
@@ -84,10 +84,13 @@ class Command(BaseCommand):
         prog = "%s assets" % path.basename(sys.argv[0])
         impl = GenericArgparseImplementation(
             env=get_env(), log=log, no_global_options=True, prog=prog)
+        DjangoResolver.force_use_static_files = True
         try:
             impl.run_with_argv(args)
         except AssetCommandError, e:
             raise CommandError(e)
+        finally:
+            DjangoResolver.force_use_static_files = False
 
     def load_from_templates(self):
         # Using the Django loader

@@ -109,10 +109,14 @@ class StorageGlobber(Globber):
 class DjangoResolver(Resolver):
     """Adds support for staticfiles resolving."""
 
+    force_use_staticfiles = False
+
     @property
     def use_staticfiles(self):
-        return settings.ASSETS_DEBUG and \
-            'django.contrib.staticfiles' in settings.INSTALLED_APPS
+        use_staticfiles = DjangoResolver.force_use_staticfiles or settings.ASSETS_DEBUG
+        if use_staticfiles and 'django.contrib.staticfiles' not in settings.INSTALLED_APPS:
+            raise Exception("You need to add the 'django.contrib.staticfiles' app for bundles to be found")
+        return use_staticfiles
 
     def glob_staticfiles(self, item):
         # The staticfiles finder system can't do globs, but we can
