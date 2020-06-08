@@ -1,19 +1,17 @@
 import imp
+import threading
+from importlib import import_module
+
+from django.apps import apps
+from django.contrib.staticfiles import finders
 from django.conf import settings
 from webassets.env import (
     BaseEnvironment, ConfigStorage, Resolver, url_prefix_join)
-from webassets.exceptions import ImminentDeprecationWarning
-try:
-    from django.contrib.staticfiles import finders
-except ImportError:
-    # Support pre-1.3 versions.
-    finders = None
 
-from glob import Globber, has_magic
+from django_assets.glob import Globber, has_magic
 
 
 __all__ = ('register',)
-
 
 
 class DjangoConfigStorage(ConfigStorage):
@@ -28,16 +26,11 @@ class DjangoConfigStorage(ConfigStorage):
         'manifest': 'ASSETS_MANIFEST',
         'load_path': 'ASSETS_LOAD_PATH',
         'url_mapping': 'ASSETS_URL_MAPPING',
-        # Deprecated
-        'expire': 'ASSETS_EXPIRE',
     }
 
     force_debug = False
 
     def _transform_key(self, key):
-        # STATIC_* are the new Django 1.3 settings,
-        # MEDIA_* was used in earlier versions.
-
         if key.lower() == 'directory':
             if hasattr(settings, 'ASSETS_ROOT'):
                 return 'ASSETS_ROOT'
@@ -142,31 +135,31 @@ class DjangoResolver(Resolver):
                 for file in globber.glob(item):
                     yield storage.path(file)
 
-    def search_for_source(self, item):
+    def search_for_source(self, ctx, item):
         if not self.use_staticfiles:
-            return Resolver.search_for_source(self, item)
+            return Resolver.search_for_source(self, ctx, item)
 
-        # Use the staticfiles finders to determine the absolute path
-        if finders:
-            if has_magic(item):
-                return list(self.glob_staticfiles(item))
-            else:
-                f = finders.find(item)
-                if f is not None:
-                    return f
+        if has_magic(item):
+            return list(self.glob_staticfiles(item))
+        else:
+            f = finders.find(item)
+            if f is not None:
+                return f
 
         raise IOError(
             "'%s' not found (using staticfiles finders)" % item)
 
-    def resolve_source_to_url(self, filepath, item):
+    def resolve_source_to_url(self, ctx, filepath, item):
         if not self.use_staticfiles:
-            return Resolver.resolve_source_to_url(self, filepath, item)
+            return Resolver.resolve_source_to_url(self, ctx, filepath, item)
 
         # With staticfiles enabled, searching the url mappings, as the
         # parent implementation does, will not help. Instead, we can
         # assume that the url is the root url + the original relative
         # item that was specified (and searched for using the finders).
-        return url_prefix_join(self.env.url, item)
+        import os
+        item = item.replace(os.sep, "/")
+        return url_prefix_join(ctx.url, item)
 
 
 class DjangoEnvironment(BaseEnvironment):
@@ -177,33 +170,27 @@ class DjangoEnvironment(BaseEnvironment):
     config_storage_class = DjangoConfigStorage
     resolver_class = DjangoResolver
 
-    def __init__(self, **config):
-        super(DjangoEnvironment, self).__init__(**config)
-
-        # This is pretty stupid, but fortunately will be removed with
-        # the deprecated option. This triggers the deprecation warnings.
-        if 'expire' in self.config:
-            self.config['expire'] = getattr(settings, 'ASSETS_EXPIRE')
-        if 'updater' in self.config:
-            self.config['updater'] = getattr(settings, 'ASSETS_UPDATER')
-
 
 # Django has a global state, a global configuration, and so we need a
 # global instance of a asset environment.
 env = None
+env_lock = threading.RLock()
 
 def get_env():
-    global env
-    if env is None:
-        env = DjangoEnvironment()
+    # While the first request is within autoload(), a second thread can come
+    # in and without the lock, would use a not-fully-loaded environment.
+    with env_lock:
+        global env
+        if env is None:
+            env = DjangoEnvironment()
 
-        # Load application's ``assets``  modules. We need to do this in
-        # a delayed fashion, since the main django_assets module imports
-        # this, and the application ``assets`` modules we load will import
-        # ``django_assets``, thus giving us a classic circular dependency
-        # issue.
-        autoload()
-    return env
+            # Load application's ``assets``  modules. We need to do this in
+            # a delayed fashion, since the main django_assets module imports
+            # this, and the application ``assets`` modules we load will import
+            # ``django_assets``, thus giving us a classic circular dependency
+            # issue.
+            autoload()
+        return env
 
 def reset():
     global env
@@ -216,18 +203,6 @@ def register(*a, **kw):
     return get_env().register(*a, **kw)
 
 
-# Finally, we'd like to autoload the ``assets`` module of each Django.
-try:
-    from django.utils.importlib import import_module
-except ImportError:
-    # django-1.0 compatibility
-    import warnings
-    warnings.warn('django-assets may not be compatible with Django versions '
-                  'earlier than 1.1', ImminentDeprecationWarning)
-    def import_module(app):
-        return __import__(app, {}, {}, [app.split('.')[-1]]).__path__
-
-
 _ASSETS_LOADED = False
 
 def autoload():
@@ -236,9 +211,6 @@ def autoload():
     process works. This is were this code has been adapted from, too.
 
     Only runs once.
-
-    TOOD: Not thread-safe!
-    TODO: Bring back to status output via callbacks?
     """
     global _ASSETS_LOADED
     if _ASSETS_LOADED:
@@ -248,42 +220,35 @@ def autoload():
     # dependency.
     from django.conf import settings
 
-    for app in settings.INSTALLED_APPS:
+    for app in apps.get_app_configs():
         # For each app, we need to look for an assets.py inside that
         # app's package. We can't use os.path here -- recall that
         # modules may be imported different ways (think zip files) --
         # so we need to get the app's __path__ and look for
         # admin.py on that path.
-        #if options.get('verbosity') > 1:
-        #    print "\t%s..." % app,
 
         # Step 1: find out the app's __path__ Import errors here will
         # (and should) bubble up, but a missing __path__ (which is
         # legal, but weird) fails silently -- apps that do weird things
         # with __path__ might need to roll their own registration.
         try:
-            app_path = import_module(app).__path__
+            app_path = app.path
         except AttributeError:
-            #if options.get('verbosity') > 1:
-            #    print "cannot inspect app"
             continue
 
         # Step 2: use imp.find_module to find the app's assets.py.
         # For some reason imp.find_module raises ImportError if the
         # app can't be found but doesn't actually try to import the
-        # module. So skip this app if its assetse.py doesn't exist
+        # module. So skip this app if its assets.py doesn't exist
         try:
-            imp.find_module('assets', app_path)
+            imp.find_module('assets', [app_path])
         except ImportError:
-            #if options.get('verbosity') > 1:
-            #    print "no assets module"
             continue
 
         # Step 3: import the app's assets file. If this has errors we
         # want them to bubble up.
-        import_module("%s.assets" % app)
-        #if options.get('verbosity') > 1:
-        #    print "assets module loaded"
+        #app_name = deduce_app_name(app)
+        import_module("{}.assets".format(app.name))
 
     # Load additional modules.
     for module in getattr(settings, 'ASSETS_MODULES', []):

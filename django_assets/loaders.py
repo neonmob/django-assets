@@ -8,26 +8,13 @@ except NameError:
     from sets import Set as set
 
 from django_assets.templatetags.assets import AssetsNode as AssetsNodeOriginal
-try:
-    from django.templatetags.assets import AssetsNode as AssetsNodeMapped
-except ImportError:
-    # Since Django #12295, custom templatetags are no longer mapped into
-    # the Django namespace. Support both versions.
-    AssetsNodeMapped = None
-AssetsNodeClasses = filter(lambda c: bool(c),
-    (AssetsNodeOriginal, AssetsNodeMapped))
+AssetsNodeMapped = None
+AssetsNodeClasses = tuple(
+    filter(lambda c: bool(c), (AssetsNodeOriginal, AssetsNodeMapped))
+)
 
 
 __all__ = ('DjangoLoader', 'get_django_template_dirs',)
-
-
-def _shortpath(abspath):
-    """Make an absolute path relative to the project's settings module,
-    which would usually be the project directory.
-    """
-    b = os.path.dirname(os.path.normpath(sys.modules[settings.SETTINGS_MODULE].__file__))
-    p = os.path.normpath(abspath)
-    return p[len(os.path.commonprefix([b, p])):]
 
 
 def uniq(seq):
@@ -41,17 +28,24 @@ def uniq(seq):
 
 
 FILESYSTEM_LOADERS = [
-    'django.template.loaders.filesystem.load_template_source', # <= 1.1
-    'django.template.loaders.filesystem.Loader',                 # > 1.2
+    'django.template.loaders.filesystem.Loader',
 ]
 APPDIR_LOADERS = [
-    'django.template.loaders.app_directories.load_template_source', # <= 1.1
-    'django.template.loaders.app_directories.Loader'            # > 1.2
+    'django.template.loaders.app_directories.Loader',
 ]
 def get_django_template_dirs(loader_list=None):
     """Build a list of template directories based on configured loaders.
     """
     if not loader_list:
+        try:
+            from django.template import engines
+        except ImportError:
+            pass
+        else:
+            # Django >=1.8
+            return uniq(sum((list(engines[e].template_dirs) for e in engines), []))
+
+        # Django <1.8
         loader_list = settings.TEMPLATE_LOADERS
 
     template_dirs = []
@@ -59,8 +53,11 @@ def get_django_template_dirs(loader_list=None):
         if loader in FILESYSTEM_LOADERS:
             template_dirs.extend(settings.TEMPLATE_DIRS)
         if loader in APPDIR_LOADERS:
-            from django.template.loaders.app_directories import app_template_dirs
-            template_dirs.extend(app_template_dirs)
+            from django.template.loaders import app_directories
+            if hasattr(app_directories, 'app_template_dirs'):
+                template_dirs.extend(app_directories.app_template_dirs)
+            elif hasattr(app_directories, 'get_app_template_dirs'):
+                template_dirs.extend(app_directories.get_app_template_dirs('templates'))
         if isinstance(loader, (list, tuple)) and len(loader) >= 2:
             # The cached loader uses the tuple syntax, but simply search all
             # tuples for nested loaders; thus possibly support custom ones too.
@@ -85,7 +82,7 @@ class DjangoLoader(GlobLoader):
         # parse the template for asset nodes
         try:
             t = template.Template(contents)
-        except template.TemplateSyntaxError, e:
+        except template.TemplateSyntaxError as e:
             raise LoaderError('Django parser failed: %s' % e)
         else:
             result = []

@@ -21,40 +21,32 @@ Usage:
         right away. Useful for cases where building takes some time.
 """
 
+import argparse
 import sys
 from os import path
 import logging
-from optparse import make_option
 from django.conf import settings
-from django.core.management import LaxOptionParser
 from django.core.management.base import BaseCommand, CommandError
 
 from webassets.script import (CommandError as AssetCommandError,
                               GenericArgparseImplementation)
 from django_assets.env import get_env, autoload, DjangoConfigStorage
 from django_assets.loaders import get_django_template_dirs, DjangoLoader
+from django_assets.manifest import DjangoManifest  # noqa: enables the --manifest django option
 
 
 class Command(BaseCommand):
-    option_list = BaseCommand.option_list + (
-        make_option('--parse-templates', action='store_true',
-            help='Search project templates to find bundles. You need '
-                 'this if you directly define your bundles in templates.'),
-    )
     help = 'Manage assets.'
-    args = 'subcommand'
-    requires_model_validation = False
+    requires_system_checks = False
 
-    def create_parser(self, prog_name, subcommand):
-        # Overwrite parser creation with a LaxOptionParser that will
-        # ignore arguments it doesn't know, allowing us to pass those
-        # along to the webassets command.
-        # Hooking into run_from_argv() would be another thing to try
-        # if this turns out to be problematic.
-        return LaxOptionParser(prog=prog_name,
-            usage=self.usage(subcommand),
-            version=self.get_version(),
-            option_list=self.option_list)
+    def add_arguments(self, parser):
+        # parser.add_argument('poll_id', nargs='+', type=str)
+        parser.add_argument('--parse-templates', action='store_true',
+            help='Search project templates to find bundles. You need '
+                 'this if you directly define your bundles in templates.')
+
+        # this collects the unrecognized arguments to pass through to webassets
+        parser.add_argument('args', nargs=argparse.REMAINDER)
 
     def handle(self, *args, **options):
         # Due to the use of LaxOptionParser ``args`` now contains all
@@ -87,8 +79,14 @@ class Command(BaseCommand):
         impl = GenericArgparseImplementation(
             env=get_env(), log=log, no_global_options=True, prog=prog)
         try:
-            impl.run_with_argv(args)
-        except AssetCommandError, e:
+            # The webassets script runner may either return None on success (so
+            # map that to zero) or a return code on build failure (so raise
+            # a Django CommandError exception when that happens)
+            retval = impl.run_with_argv(args) or 0
+            if retval != 0:
+                raise CommandError('The webassets build script exited with '
+                                   'a non-zero exit code (%d).' % retval)
+        except AssetCommandError as e:
             raise CommandError(e)
         finally:
             DjangoConfigStorage.force_debug = False
